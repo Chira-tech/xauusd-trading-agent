@@ -5,9 +5,10 @@ from Yahoo Finance's public chart endpoint), and after every few closed trades i
 changes **exactly one** strategy variable — tightening a stop, widening an entry,
 resizing positions — always snapshotting the previous strategy first.
 
-There is **no live trading**, no cloud deploy, no external LLM, and no network
-access beyond downloading gold prices. The learning rule is deterministic and
-lives in `agent/reflect.py` — you can read exactly why every change was made.
+There is **no live trading** and no cloud deploy. The default learning rule is
+deterministic and lives in `agent/reflect.py`; `--llm` swaps in a language model
+for the change decision (still guardrailed and logged). `evolve` wraps all of
+this in a train/validation loop so only changes that generalise are kept.
 
 ## Setup (one time)
 
@@ -21,15 +22,44 @@ pip install -r requirements.txt
 ## Run
 
 ```powershell
-python run.py backtest        # learn over ~5 years of gold history — start here
-python run.py status          # current strategy, equity, and every reflection
+python run.py evolve          # continuous scientific-method loop — THIS is the one
+python run.py evolve --llm --iterations 200
+python run.py status          # strategy, equity, reflection log + experiment ledger
+python run.py backtest        # single chronological pass (diagnostic; resets to v01)
 python run.py reflect --dry-run   # see the next proposed change without applying it
 python run.py paper           # forward paper-trade the live price (Ctrl-C to stop)
 python run.py refresh         # re-download the price history
 ```
 
-`backtest` starts fresh each time (strategy reset to v01). Use
-`python run.py backtest --resume` to keep evolving the current strategy.
+## `evolve` — continuous improvement under the scientific method
+
+`evolve` splits the price history into a **train** window and a held-out
+**validation** window (last 20% by default). Each iteration:
+
+1. simulate the train window with the current, frozen strategy
+2. propose **one** variable change — the deterministic rule (which skips
+   variables already falsified this round) or, with `--llm`, a model that also
+   sees the experiment ledger
+3. score the current strategy vs the candidate **on the validation window**
+4. **verdict** from the validation-score change:
+   - clearly better → `SUPPORTED`, keep it, bump the version
+   - not measurably worse → `INCONCLUSIVE`, keep, stop retrying that variable
+   - measurably worse → `FALSIFIED`, **revert**, stop retrying that variable
+5. append the experiment to `state/experiments.jsonl`
+
+Nothing that hurt the held-out window is ever adopted, so improvements have to
+generalise rather than overfit. The loop stops after `--iterations`, or after
+`--patience` iterations with no supported change. `evolve` resets to v01 each
+run; use `--resume` to keep evolving the current strategy and ledger.
+
+The deterministic rule has a small, fixed set of hypotheses and converges in a
+handful of iterations. `--llm` is where "keep improving for hundreds of
+iterations" actually happens — it varies its hypotheses and learns from the
+falsified ones in the ledger.
+
+`backtest` is a different, single chronological pass where the strategy adapts as
+it goes; it resets `strategy.yaml` to v01 unless you pass `--resume`. Treat
+`evolve` as the source of truth for the strategy.
 
 ## LLM brain (optional) — `--llm`
 

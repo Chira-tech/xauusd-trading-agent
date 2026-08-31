@@ -10,6 +10,7 @@ STRATEGY_FILE = STATE / "strategy.yaml"
 TRADES_FILE = STATE / "trades.jsonl"
 EQUITY_FILE = STATE / "equity.jsonl"
 HYPOTHESES_FILE = STATE / "hypotheses.jsonl"
+EXPERIMENTS_FILE = STATE / "experiments.jsonl"
 HEARTBEAT_FILE = STATE / "heartbeat.json"
 PRICE_CACHE = STATE / "price_cache.csv"
 

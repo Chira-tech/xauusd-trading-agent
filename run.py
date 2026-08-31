@@ -1,13 +1,17 @@
 """Self-learning paper-trading agent for gold/USD.
 
-    python run.py backtest        learn over historical gold data (start here)
-    python run.py backtest --resume   continue from the current strategy/trades
+    python run.py evolve          continuous scientific-method loop: train/validation
+                                  split, one change per iteration, keep or revert on
+                                  the held-out validation score (this is the one you
+                                  want for "keep improving the strategy")
+    python run.py evolve --llm --iterations 200
+    python run.py backtest        single chronological pass, strategy adapts as it goes
     python run.py backtest --llm      let an LLM pick each one-variable change
     python run.py paper           forward paper-trade the live price on an interval
     python run.py reflect         force one reflection cycle now (deterministic rule)
     python run.py reflect --llm       let an LLM propose the change
     python run.py reflect --dry-run   show the proposed change without applying it
-    python run.py status          print current strategy, equity, reflection log
+    python run.py status          strategy, equity, reflection + experiment ledger
     python run.py refresh         re-download the gold price history
 
 Paper mode only. Nothing here can place a real order. --llm uses the `claude`
@@ -20,6 +24,7 @@ import os
 
 from agent import config, paths
 from agent.data import get_history
+from agent.evolve import evolve
 from agent.loop import backtest, paper
 from agent.portfolio import read_jsonl
 from agent.reflect import run_reflection
@@ -46,6 +51,18 @@ def cmd_backtest(args):
 
 def cmd_paper(args):
     paper(config.load_goal(), interval=args.interval, chooser=_llm_chooser(args))
+
+
+def cmd_evolve(args):
+    goal = config.load_goal()
+    if args.backend:
+        os.environ["LLM_BACKEND"] = args.backend
+    bars = get_history(goal)
+    brain = "LLM" if args.llm else "deterministic rule"
+    print(f"evolve  |  {goal['asset']}  |  brain: {brain}  |  "
+          f"val {int(args.val_frac * 100)}% held out  |  patience {args.patience}\n")
+    evolve(goal, bars, iterations=args.iterations, val_frac=args.val_frac,
+           patience=args.patience, use_llm=args.llm, fresh=not args.resume)
 
 
 def cmd_reflect(args):
@@ -84,6 +101,18 @@ def cmd_status(args):
               f"{h['variable']}: {h['old_value']} -> {h['new_value']}   "
               f"score {h['batch_score']:+.3f}   outcome={h.get('outcome')}")
 
+    exps = read_jsonl(paths.EXPERIMENTS_FILE)
+    if exps:
+        from collections import Counter
+        tally = Counter(e["verdict"] for e in exps)
+        print(f"\nEXPERIMENTS  {len(exps)} run   "
+              f"SUPPORTED {tally['SUPPORTED']}  FALSIFIED {tally['FALSIFIED']}  "
+              f"INCONCLUSIVE {tally['INCONCLUSIVE']}")
+        for e in exps[-8:]:
+            print(f"  #{e['iter']:>3}  {e['variable']}: {e['old_value']} -> {e['new_value']}   "
+                  f"val {e['val_score_before']:+.3f} -> {e['val_score_after']:+.3f}   "
+                  f"{e['verdict']} [{e['action']}]")
+
 
 def cmd_refresh(args):
     goal = config.load_goal()
@@ -103,6 +132,18 @@ def main():
         sp.add_argument("--backend", choices=("auto", "cli", "api"),
                         help="LLM backend for --llm (default auto: api if "
                              "ANTHROPIC_API_KEY set, else the claude CLI)")
+
+    e = sub.add_parser("evolve", help="continuous train/validation evolution loop")
+    e.add_argument("--iterations", type=int, default=100,
+                   help="max iterations (default 100)")
+    e.add_argument("--val-frac", type=float, default=0.2, dest="val_frac",
+                   help="fraction of history held out for validation (default 0.2)")
+    e.add_argument("--patience", type=int, default=15,
+                   help="stop after this many iterations with no supported change")
+    e.add_argument("--resume", action="store_true",
+                   help="keep the current strategy + ledger instead of resetting to v01")
+    add_llm_flags(e)
+    e.set_defaults(func=cmd_evolve)
 
     b = sub.add_parser("backtest", help="learn over historical gold data")
     b.add_argument("--resume", action="store_true",

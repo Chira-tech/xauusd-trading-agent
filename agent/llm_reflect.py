@@ -28,7 +28,22 @@ class LLMReflectError(RuntimeError):
     """The LLM response was unusable; caller should fall back to the rule."""
 
 
-def _build_prompt(strategy: dict, detail: dict, goal: dict, trades_batch: list[dict]) -> str:
+def _history_block(history: list[dict]) -> str:
+    if not history:
+        return ""
+    rows = "\n".join(
+        f'  {h.get("variable")}: {h.get("old_value")} -> {h.get("new_value")}  '
+        f'val {h.get("val_score_before")}->{h.get("val_score_after")}  {h.get("verdict")}'
+        for h in history[-12:]
+    )
+    return (
+        "\nRECENT EXPERIMENTS (held-out validation score; do NOT repeat a "
+        "FALSIFIED change):\n" + rows + "\n"
+    )
+
+
+def _build_prompt(strategy: dict, detail: dict, goal: dict, trades_batch: list[dict],
+                  history: list[dict] | None = None) -> str:
     trade_lines = "\n".join(
         f'  {t["entry_date"]} -> {t["exit_date"]}  {t["reason"]:<11} '
         f'ret {t["return"]:+.4f}  equity ${t["equity_after"]:.0f}'
@@ -62,7 +77,7 @@ BATCH METRICS:
   max drawdown    : {detail['max_drawdown']:.4f}
   Sharpe          : {detail['sharpe']}
   win rate        : {detail['win_rate']:.2f}
-
+{_history_block(history or [])}
 Pick the single highest-impact one-variable change. Respond with ONLY a JSON \
 object on one line -- no prose, no code fence:
 {{"variable": "<one of: {allowed}>", "new_value": <number>, "reasoning": "<why, <=300 chars>", "prediction": "<expected effect next batch, <=200 chars>"}}
@@ -147,10 +162,15 @@ def _pick_backend() -> str:
     return "cli"
 
 
-def llm_choose_change(strategy: dict, detail: dict, goal: dict, trades_batch: list[dict]):
-    """Drop-in replacement for reflect.choose_change, backed by an LLM."""
+def llm_choose_change(strategy: dict, detail: dict, goal: dict, trades_batch: list[dict],
+                      history: list[dict] | None = None):
+    """Drop-in replacement for reflect.choose_change, backed by an LLM.
+
+    `history`: recent experiment rows (evolve.py) so the model can avoid
+    repeating a change already falsified on the validation window.
+    """
     backend = _pick_backend()
-    prompt = _build_prompt(strategy, detail, goal, trades_batch)
+    prompt = _build_prompt(strategy, detail, goal, trades_batch, history)
     raw = _call_api(prompt) if backend == "api" else _call_cli(prompt)
     obj = _extract_json(raw)
 

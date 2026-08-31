@@ -49,57 +49,99 @@ def _clamp(value: float, dotted: str) -> float:
     return round(max(lo, min(hi, value)), 4)
 
 
-def choose_change(strategy: dict, detail: dict, goal: dict):
-    """Return (dotted_var, new_value, reasoning, prediction). Exactly one variable."""
+def _proposals(strategy: dict, detail: dict, goal: dict):
+    """Ordered list of candidate one-variable changes, highest priority first.
+
+    Each entry is (dotted_var, new_value, reasoning, prediction). The list lets a
+    caller skip a variable it has already falsified this round (see `blacklist`
+    in choose_change) and move to the next-best lever.
+    """
     realised = detail["realised_return"]
     dd = detail["max_drawdown"]
     sharpe = detail["sharpe"]
     win_rate = detail["win_rate"]
+    out = []
 
-    # Priority 1 -- failure condition breached: protect capital, tighten the stop.
+    def add(var, delta, why, predict):
+        cur = _get(strategy, var)
+        new = _clamp(cur + delta, var)
+        if new != cur:
+            out.append((var, new, why.format(cur=cur, new=new), predict))
+
+    # Priority 1 -- failure condition breached: protect capital.
     if dd > goal["max_drawdown"]:
-        cur = _get(strategy, "stop_loss_pct")
-        new = _clamp(cur - 0.3, "stop_loss_pct")
-        return ("stop_loss_pct", new,
-                f"Batch drawdown {dd:.2%} breached the {goal['max_drawdown']:.0%} failure limit. "
-                f"Tightening stop_loss_pct {cur} -> {new} to cap the loss on each trade.",
-                "Next batch drawdown stays under the limit; realised return may fall slightly.")
+        add("stop_loss_pct", -0.3,
+            f"Drawdown {dd:.2%} breached the {goal['max_drawdown']:.0%} failure limit. "
+            "Tighten stop_loss_pct {cur} -> {new} to cap each loss.",
+            "Drawdown falls back under the limit; realised return may dip.")
+        add("position_size_r", -0.1,
+            f"Drawdown {dd:.2%} over the {goal['max_drawdown']:.0%} limit. "
+            "Cut position_size_r {cur} -> {new} to shrink every loss.",
+            "Drawdown drops proportionally; returns scale down.")
 
     # Priority 2 -- return under target.
     if realised < goal["target_return_30d"]:
         if win_rate >= 0.5:
-            # Setups are working when taken -- take more of them.
-            cur = _get(strategy, "entry.threshold")
-            new = _clamp(cur + 2.0, "entry.threshold")
-            return ("entry.threshold", new,
-                    f"Realised {realised:.2%} is below the +{goal['target_return_30d']:.0%} target but "
-                    f"win rate is {win_rate:.0%}. Raising RSI entry threshold {cur} -> {new} to take more setups.",
-                    "Next batch has more trades and realised return moves toward target.")
+            add("entry.threshold", +2.0,
+                f"Return {realised:.2%} below the +{goal['target_return_30d']:.0%} target, "
+                f"but win rate {win_rate:.0%}. Raise entry.threshold {{cur}} -> {{new}} to take more setups.",
+                "More trades next batch; realised return moves toward target.")
+            add("position_size_r", +0.1,
+                f"Return {realised:.2%} under target with a solid {win_rate:.0%} win rate. "
+                "Raise position_size_r {cur} -> {new} to compound the edge.",
+                "Realised return scales up; watch drawdown.")
         else:
-            # Winning too rarely -- bank profit sooner.
-            cur = _get(strategy, "exit.take_profit_pct")
-            new = _clamp(cur - 0.5, "exit.take_profit_pct")
-            return ("exit.take_profit_pct", new,
-                    f"Realised {realised:.2%} below target with a weak {win_rate:.0%} win rate. "
-                    f"Lowering take_profit_pct {cur} -> {new} to lock gains before they reverse.",
-                    "Next batch win rate rises; average winning trade is smaller.")
+            add("exit.take_profit_pct", -0.5,
+                f"Return {realised:.2%} under target, weak {win_rate:.0%} win rate. "
+                "Lower take_profit_pct {cur} -> {new} to bank gains sooner.",
+                "Win rate rises; average win shrinks.")
+            add("entry.threshold", -2.0,
+                f"Return {realised:.2%} under target, weak {win_rate:.0%} win rate. "
+                "Lower entry.threshold {cur} -> {new} to be more selective.",
+                "Fewer, higher-quality entries; win rate rises.")
 
-    # Priority 3 -- return is fine but too bumpy.
+    # Priority 3 -- return fine but too bumpy.
     if sharpe < goal["min_sharpe"]:
-        cur = _get(strategy, "position_size_r")
-        new = _clamp(cur - 0.1, "position_size_r")
-        return ("position_size_r", new,
-                f"Return meets target but batch Sharpe {sharpe:.2f} is under {goal['min_sharpe']}. "
-                f"Cutting position_size_r {cur} -> {new} to smooth the equity curve.",
-                "Next batch Sharpe improves; realised return scales down modestly.")
+        add("position_size_r", -0.1,
+            f"Return meets target but Sharpe {sharpe:.2f} is under {goal['min_sharpe']}. "
+            "Cut position_size_r {cur} -> {new} to smooth the curve.",
+            "Sharpe improves; realised return scales down modestly.")
+        add("exit.rsi_exit", -3.0,
+            f"Sharpe {sharpe:.2f} under {goal['min_sharpe']}. "
+            "Lower exit.rsi_exit {cur} -> {new} to leave trades earlier and reduce variance.",
+            "Shorter holds, steadier equity.")
 
-    # Priority 4 -- everything passed: press the edge.
-    cur = _get(strategy, "position_size_r")
-    new = _clamp(cur + 0.1, "position_size_r")
-    return ("position_size_r", new,
-            f"All bars cleared (return {realised:.2%}, drawdown {dd:.2%}, Sharpe {sharpe:.2f}). "
-            f"Raising position_size_r {cur} -> {new} to compound the working edge.",
-            "Next batch realised return rises; drawdown must stay within the limit.")
+    # Priority 4 -- everything passed: press the edge, then widen the net.
+    add("position_size_r", +0.1,
+        f"All bars cleared (return {realised:.2%}, DD {dd:.2%}, Sharpe {sharpe:.2f}). "
+        "Raise position_size_r {cur} -> {new} to compound.",
+        "Realised return rises; drawdown must stay within the limit.")
+    add("entry.threshold", +1.0,
+        f"All bars cleared. Raise entry.threshold {{cur}} -> {{new}} to take a wider set of setups.",
+        "More trades; return and drawdown both edge up.")
+    return out
+
+
+def choose_change(strategy: dict, detail: dict, goal: dict, blacklist=frozenset()):
+    """Return (dotted_var, new_value, reasoning, prediction). Exactly one variable.
+
+    `blacklist`: dotted variable names to skip (already falsified this round).
+    """
+    for var, new, why, predict in _proposals(strategy, detail, goal):
+        if var not in blacklist:
+            return var, new, why, predict
+
+    # Everything sensible is blacklisted -- nudge any remaining tunable toward mid-range.
+    for var, (lo, hi) in BOUNDS.items():
+        if var in blacklist:
+            continue
+        cur = _get(strategy, var)
+        mid = (lo + hi) / 2.0
+        new = _clamp(cur + (0.1 if cur < mid else -0.1) * (hi - lo), var)
+        if new != cur:
+            return var, new, f"Exploratory nudge of {var} {cur} -> {new} (priority levers exhausted).", \
+                   "Unknown effect; measured on the validation window."
+    raise RuntimeError("no tunable variable left to change")
 
 
 def _grade_previous(current_score: float) -> None:
