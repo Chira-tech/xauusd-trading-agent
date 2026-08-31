@@ -1,8 +1,8 @@
-version: '02'
+version: '01'
 entry:
   indicator: rsi
   period: 14
-  threshold: 32.0
+  threshold: 30
   direction: long
 exit:
   rsi_exit: 55
