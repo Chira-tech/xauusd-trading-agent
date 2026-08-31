@@ -30,8 +30,9 @@ def _reset_run_state() -> None:
     config.restore_baseline()
 
 
-def _reflect(batch, equity_pts, goal, n) -> dict:
-    hyp, strategy, _ = run_reflection(batch, equity_pts, goal, source="deterministic")
+def _reflect(batch, equity_pts, goal, n, chooser=None) -> dict:
+    source = "llm" if chooser is not None else "deterministic"
+    hyp, strategy, _ = run_reflection(batch, equity_pts, goal, source=source, chooser=chooser)
     m = hyp["metrics"]
     print(f"\n  -- reflection #{n}   v{hyp['from_version']} -> v{hyp['to_version']} --")
     print(f"     batch score {hyp['batch_score']:+.3f}    "
@@ -59,7 +60,7 @@ def _summary(acc: Paper, n_closed: int, n_reflections: int, strategy: dict) -> N
     print("=" * 64)
 
 
-def backtest(goal: dict, fresh: bool = True) -> None:
+def backtest(goal: dict, fresh: bool = True, chooser=None) -> None:
     if fresh:
         _reset_run_state()
     paths.ensure_dirs()
@@ -102,7 +103,7 @@ def backtest(goal: dict, fresh: bool = True) -> None:
 
                 if len(batch) >= cadence:
                     n_reflections += 1
-                    strategy = _reflect(batch, batch_equity, goal, n_reflections)
+                    strategy = _reflect(batch, batch_equity, goal, n_reflections, chooser)
                     if strategy["entry"]["period"] != cur_period:
                         cur_period = strategy["entry"]["period"]
                         rsi_series = rsi_calc(closes, cur_period)
@@ -127,7 +128,7 @@ def backtest(goal: dict, fresh: bool = True) -> None:
     _summary(acc, n_closed, n_reflections, strategy)
 
 
-def paper(goal: dict, interval: int = 900) -> None:
+def paper(goal: dict, interval: int = 900, chooser=None) -> None:
     """Forward paper-trade the live gold price. Resumes from state/ if it exists."""
     paths.ensure_dirs()
     strategy = config.load_strategy()
@@ -178,7 +179,7 @@ def paper(goal: dict, interval: int = 900) -> None:
                           f"equity ${trade['equity_after']:,.0f}")
                     if since_reflection >= goal["reflection_every"]:
                         strategy = _reflect(batch, acc.equity_points[-max(len(batch) * 3, 10):],
-                                            goal, n_closed // goal["reflection_every"])
+                                            goal, n_closed // goal["reflection_every"], chooser)
                         batch = []
                         since_reflection = 0
             elif entry_signal(strategy, r):

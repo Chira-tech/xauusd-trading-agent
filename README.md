@@ -31,6 +31,40 @@ python run.py refresh         # re-download the price history
 `backtest` starts fresh each time (strategy reset to v01). Use
 `python run.py backtest --resume` to keep evolving the current strategy.
 
+## LLM brain (optional) — `--llm`
+
+By default the "which one variable to change" decision comes from the
+deterministic rule in `agent/reflect.py`. Add `--llm` to hand that decision to a
+language model instead — it reads the batch of trades and the current strategy
+and proposes one change, which is still validated against the same bounds and
+still logged with its reasoning:
+
+```powershell
+python run.py reflect --llm --dry-run   # see the model's proposed change
+python run.py backtest --llm            # LLM picks every change across the run
+python run.py paper --llm               # LLM drives the live forward test
+```
+
+Backends (`--backend`, default `auto`):
+
+- **`cli`** — shells out to the `claude` CLI, using your existing Claude Code
+  login. No API key needed. This is the default when `ANTHROPIC_API_KEY` is unset.
+- **`api`** — Anthropic API via the `anthropic` package (`pip install anthropic`)
+  and `ANTHROPIC_API_KEY`. Model defaults to `claude-opus-5`; override with
+  `LLM_MODEL`.
+
+If the model's answer can't be parsed or breaks a guardrail (unknown variable,
+value out of range, no actual change), the cycle falls back to the deterministic
+rule and the hypothesis is tagged `...+fallback`.
+
+### Pointing `--llm` at Hermes Agent
+
+If you install [Hermes Agent](https://github.com/NousResearch/hermes-agent) and
+it exposes a non-interactive CLI, set `CLAUDE_BIN` to that binary (it must accept
+a prompt on stdin and print the reply) — `agent/llm_reflect.py` will call it in
+place of `claude`. Nothing in this project runs Hermes in an unattended loop or
+deploys anything; you invoke each reflection yourself.
+
 ## The strategy (`state/strategy.yaml`, starts at v01)
 
 Long-only RSI mean-reversion:

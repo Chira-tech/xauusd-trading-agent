@@ -2,16 +2,21 @@
 
     python run.py backtest        learn over historical gold data (start here)
     python run.py backtest --resume   continue from the current strategy/trades
+    python run.py backtest --llm      let an LLM pick each one-variable change
     python run.py paper           forward paper-trade the live price on an interval
-    python run.py reflect         force one reflection cycle now
+    python run.py reflect         force one reflection cycle now (deterministic rule)
+    python run.py reflect --llm       let an LLM propose the change
     python run.py reflect --dry-run   show the proposed change without applying it
     python run.py status          print current strategy, equity, reflection log
     python run.py refresh         re-download the gold price history
 
-Paper mode only. Nothing here can place a real order.
+Paper mode only. Nothing here can place a real order. --llm uses the `claude`
+CLI by default (your existing login, no API key); set --backend api to use the
+Anthropic API via ANTHROPIC_API_KEY instead.
 """
 import argparse
 import json
+import os
 
 from agent import config, paths
 from agent.data import get_history
@@ -20,16 +25,27 @@ from agent.portfolio import read_jsonl
 from agent.reflect import run_reflection
 
 
+def _llm_chooser(args):
+    """Return the LLM chooser callable if --llm was passed, else None."""
+    if not getattr(args, "llm", False):
+        return None
+    if getattr(args, "backend", None):
+        os.environ["LLM_BACKEND"] = args.backend
+    from agent.llm_reflect import llm_choose_change
+    return llm_choose_change
+
+
 def cmd_backtest(args):
     goal = config.load_goal()
+    brain = "LLM" if args.llm else "deterministic rule"
     print(f"gold/USD self-learning agent  |  target +{goal['target_return_30d']:.0%}/30d  "
           f"max DD {goal['max_drawdown']:.0%}  min Sharpe {goal['min_sharpe']}  "
-          f"reflect every {goal['reflection_every']} trades\n")
-    backtest(goal, fresh=not args.resume)
+          f"reflect every {goal['reflection_every']} trades  |  brain: {brain}\n")
+    backtest(goal, fresh=not args.resume, chooser=_llm_chooser(args))
 
 
 def cmd_paper(args):
-    paper(config.load_goal(), interval=args.interval)
+    paper(config.load_goal(), interval=args.interval, chooser=_llm_chooser(args))
 
 
 def cmd_reflect(args):
@@ -40,7 +56,9 @@ def cmd_reflect(args):
     batch = trades[-goal["reflection_every"]:]
     equity = read_jsonl(paths.EQUITY_FILE)
     hyp, _, _ = run_reflection(batch, equity[-len(batch) * 3:], goal,
-                               source="manual", dry_run=args.dry_run)
+                               source="manual-llm" if args.llm else "manual",
+                               dry_run=args.dry_run, chooser=_llm_chooser(args),
+                               fallback=not args.no_fallback)
     print(json.dumps(hyp, indent=2))
     if args.dry_run:
         print("\n(dry run -- strategy.yaml was not modified)")
@@ -79,19 +97,31 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    def add_llm_flags(sp):
+        sp.add_argument("--llm", action="store_true",
+                        help="let an LLM choose the one-variable change")
+        sp.add_argument("--backend", choices=("auto", "cli", "api"),
+                        help="LLM backend for --llm (default auto: api if "
+                             "ANTHROPIC_API_KEY set, else the claude CLI)")
+
     b = sub.add_parser("backtest", help="learn over historical gold data")
     b.add_argument("--resume", action="store_true",
                    help="keep existing trades/strategy instead of starting fresh")
+    add_llm_flags(b)
     b.set_defaults(func=cmd_backtest)
 
     pp = sub.add_parser("paper", help="forward paper-trade the live price")
     pp.add_argument("--interval", type=int, default=900,
                     help="seconds between polls (default 900)")
+    add_llm_flags(pp)
     pp.set_defaults(func=cmd_paper)
 
     r = sub.add_parser("reflect", help="force one reflection cycle now")
     r.add_argument("--dry-run", action="store_true",
                    help="show the proposed change without applying it")
+    r.add_argument("--no-fallback", action="store_true",
+                   help="with --llm, fail instead of falling back to the rule")
+    add_llm_flags(r)
     r.set_defaults(func=cmd_reflect)
 
     s = sub.add_parser("status", help="print strategy, equity, reflection log")

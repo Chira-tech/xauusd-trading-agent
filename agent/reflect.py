@@ -119,11 +119,27 @@ def _grade_previous(current_score: float) -> None:
     rewrite_jsonl(paths.HYPOTHESES_FILE, hyps)
 
 
-def run_reflection(trades_batch, equity_points, goal, source="deterministic", dry_run=False):
-    """Score the batch, choose one change, apply it. Returns (hypothesis, strategy, snapshot_path)."""
+def run_reflection(trades_batch, equity_points, goal, source="deterministic",
+                   dry_run=False, chooser=None, fallback=True):
+    """Score the batch, choose one change, apply it. Returns (hypothesis, strategy, snapshot_path).
+
+    chooser: callable(strategy, detail, goal, trades_batch) -> (var, new_value, reasoning, prediction).
+             Defaults to the deterministic rule in this module. If it raises and
+             `fallback` is true, the deterministic rule is used and `source` is
+             suffixed with "+fallback".
+    """
     strategy = config.load_strategy()
     batch_score, detail = score(trades_batch, equity_points, goal)
-    var, new_value, reasoning, prediction = choose_change(strategy, detail, goal)
+
+    chooser = chooser or (lambda s, d, g, _tb: choose_change(s, d, g))
+    try:
+        var, new_value, reasoning, prediction = chooser(strategy, detail, goal, trades_batch)
+    except Exception as e:
+        if not fallback:
+            raise
+        var, new_value, reasoning, prediction = choose_change(strategy, detail, goal)
+        reasoning = f"[fell back to deterministic rule -- {e}] {reasoning}"
+        source = f"{source}+fallback"
     old_value = _get(strategy, var)
 
     prev_version = strategy["version"]
