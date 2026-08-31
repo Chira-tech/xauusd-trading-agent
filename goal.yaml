@@ -1,9 +1,10 @@
 # What success and failure mean for the agent.
 # Every reflection cycle scores the last batch of trades against these numbers.
 
-asset: "gold/USD (GC=F)"  # COMEX continuous gold futures, priced in US dollars
-data_source: "yahoo"      # yahoo (stdlib, no deps) | yfinance (needs `pip install yfinance`)
-yf_symbol: "GC=F"         # ticker to request from whichever source
+asset: "XAU/USD spot gold"   # spot gold priced in US dollars
+data_source: "twelvedata"    # twelvedata (needs TWELVEDATA_API_KEY) | yahoo | yfinance
+                             # override without editing this file: DATA_SOURCE=... in .env
+yf_symbol: "GC=F"            # ticker used only by the yahoo / yfinance sources
 
 target_return_30d: 0.10   # SUCCESS: +10% compounded over a batch of trades
 max_drawdown: 0.05        # FAILURE: 5% peak-to-trough equity drawdown

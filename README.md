@@ -1,14 +1,14 @@
-# Self-learning paper-trading agent — gold/USD
+# Self-learning paper-trading agent — XAU/USD (spot gold)
 
-A small, fully local experiment. It paper-trades gold (`GC=F`, free daily data
-from Yahoo Finance's public chart endpoint), and after every few closed trades it **reflects** on the batch and
-changes **exactly one** strategy variable — tightening a stop, widening an entry,
-resizing positions — always snapshotting the previous strategy first.
+A paper-trading experiment that improves its own strategy under the scientific
+method. It splits price history into a **train** window and a held-out
+**validation** window, proposes **one** variable change at a time, and keeps a
+change only if it improves the validation score — reverting anything that
+doesn't. Every experiment is logged with its reasoning and verdict.
 
-There is **no live trading** and no cloud deploy. The default learning rule is
-deterministic and lives in `agent/reflect.py`; `--llm` swaps in a language model
-for the change decision (still guardrailed and logged). `evolve` wraps all of
-this in a train/validation loop so only changes that generalise are kept.
+There is **no live trading**. The change decision comes from a deterministic
+rule (`agent/reflect.py`) by default, or a language model with `--llm` (still
+guardrailed and logged).
 
 ## Setup (one time)
 
@@ -17,7 +17,21 @@ cd "C:\Users\USER\Documents\trading agent"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+copy .env.example .env       # then paste your Twelve Data API key into .env
 ```
+
+## Data source
+
+Set by `DATA_SOURCE` in `.env` (overrides `goal.yaml`):
+
+| value | source | notes |
+|---|---|---|
+| `twelvedata` | `api.twelvedata.com` | needs `TWELVEDATA_API_KEY`; real `XAU/USD` spot, daily bars back to 2008 + intraday; free tier 800 calls/day |
+| `yahoo` | Yahoo chart JSON | keyless, no signup; `GC=F` futures, ~5 years daily |
+| `yfinance` | `yfinance` package | `pip install yfinance` |
+
+Extra `.env` knobs for Twelve Data: `TWELVEDATA_SYMBOL` (default `XAU/USD`),
+`TWELVEDATA_INTERVAL` (`1day`, `1h`, …), `TWELVEDATA_OUTPUTSIZE` (default 5000).
 
 ## Run
 
@@ -43,14 +57,16 @@ python run.py refresh         # re-download the price history
 3. score the current strategy vs the candidate **on the validation window**
 4. **verdict** from the validation-score change:
    - clearly better → `SUPPORTED`, keep it, bump the version
-   - not measurably worse → `INCONCLUSIVE`, keep, stop retrying that variable
-   - measurably worse → `FALSIFIED`, **revert**, stop retrying that variable
+   - small real gain → `INCONCLUSIVE`, keep, stop retrying that variable
+   - no measurable effect → `NEUTRAL`, **revert** (don't accumulate cruft)
+   - worse → `FALSIFIED`, **revert**, stop retrying that variable
 5. append the experiment to `state/experiments.jsonl`
 
-Nothing that hurt the held-out window is ever adopted, so improvements have to
-generalise rather than overfit. The loop stops after `--iterations`, or after
-`--patience` iterations with no supported change. `evolve` resets to v01 each
-run; use `--resume` to keep evolving the current strategy and ledger.
+Nothing that fails to improve the held-out window is ever adopted, so
+improvements have to generalise rather than overfit. The loop stops after
+`--iterations`, or after `--patience` iterations with no supported change.
+`evolve` resets to v01 each run; use `--resume` to keep evolving the current
+strategy and ledger.
 
 The deterministic rule has a small, fixed set of hypotheses and converges in a
 handful of iterations. `--llm` is where "keep improving for hundreds of
@@ -60,6 +76,24 @@ falsified ones in the ledger.
 `backtest` is a different, single chronological pass where the strategy adapts as
 it goes; it resets `strategy.yaml` to v01 unless you pass `--resume`. Treat
 `evolve` as the source of truth for the strategy.
+
+### Hands-off continuous evolution (GitHub Actions)
+
+`.github/workflows/evolve.yml` runs `evolve --resume` every 6 hours on GitHub's
+runners and commits the updated `state/strategy.yaml` + `state/experiments.jsonl`
+back to the repo — so the strategy keeps improving with no machine of yours left
+on, and every change is a reviewable commit. One-time setup:
+
+1. Repo **Settings → Secrets and variables → Actions → New repository secret**:
+   `TWELVEDATA_API_KEY` = your key. (Without it the workflow falls back to the
+   keyless Yahoo feed.)
+2. **Actions** tab → enable workflows if prompted.
+3. Trigger a first run from the **Actions → evolve → Run workflow** button, or
+   wait for the schedule.
+
+The CI run uses the deterministic rule. To use `--llm` there, add an
+`ANTHROPIC_API_KEY` secret and change the `evolve` step to
+`python run.py evolve --resume --llm --backend api`.
 
 ## LLM brain (optional) — `--llm`
 

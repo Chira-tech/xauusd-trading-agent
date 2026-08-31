@@ -1,0 +1,12 @@
+version: "01"
+# Long-only RSI mean-reversion on gold. The reflection loop mutates ONE field per cycle.
+entry:
+  indicator: rsi
+  period: 14
+  threshold: 30          # enter long when RSI closes below this
+  direction: long
+exit:
+  rsi_exit: 55           # exit when RSI recovers above this
+  take_profit_pct: 3.0   # or exit at +3% from entry
+stop_loss_pct: 2.0       # hard stop: -2% from entry
+position_size_r: 0.5     # fraction of equity deployed per trade (0..1)

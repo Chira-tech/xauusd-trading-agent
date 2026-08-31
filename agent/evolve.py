@@ -12,9 +12,10 @@ One iteration:
   3. build the candidate strategy; score current vs candidate on VALIDATION
   4. verdict from the validation-score delta:
        > +NOISE     -> SUPPORTED     keep; clear the falsified set
-       0 .. +NOISE  -> INCONCLUSIVE  keep (not measurably worse); blacklist the var
+       0 .. +NOISE  -> INCONCLUSIVE  keep the small real gain; blacklist the var
+       == 0         -> NEUTRAL       revert (no effect, don't accumulate cruft)
        < 0          -> FALSIFIED     revert; blacklist the var
-     Nothing that measurably hurt the held-out window is ever adopted.
+     Nothing that failed to improve the held-out window is ever adopted.
   5. append the experiment to state/experiments.jsonl
 
 Stops after --iterations, or --patience iterations with no SUPPORTED change.
@@ -136,14 +137,19 @@ def evolve(goal, bars, iterations=100, val_frac=0.2, patience=15,
             _snapshot(strategy)
             config.save_strategy(candidate)
             strategy = candidate
-        elif delta >= 0.0:
+        elif delta > 0.0:
             verdict, action = "INCONCLUSIVE", "kept"
             n_inc += 1
             since_sup += 1
-            falsified_vars.add(var)  # not measurably better -- stop retrying it
+            falsified_vars.add(var)  # small real gain banked; stop retrying it
             _snapshot(strategy)
             config.save_strategy(candidate)
             strategy = candidate
+        elif delta == 0.0:
+            verdict, action = "NEUTRAL", "reverted"  # no measurable effect -- don't accumulate
+            n_inc += 1
+            since_sup += 1
+            falsified_vars.add(var)
         else:
             verdict, action = "FALSIFIED", "reverted"
             n_fal += 1

@@ -1,17 +1,21 @@
-"""Free gold/USD price history.
+"""Gold/USD price history.
 
-Primary source: Yahoo Finance's public chart JSON endpoint, fetched with the
-standard library only -- so the core agent has zero third-party data
-dependencies. Symbol `GC=F` is COMEX continuous gold futures, priced in USD.
+Source is chosen by, in order: the DATA_SOURCE env var (from .env), then
+`data_source` in goal.yaml, then "yahoo".
 
-Set `data_source: yfinance` in goal.yaml to use the `yfinance` package instead
-(`pip install yfinance`).
+  yahoo       Yahoo Finance public chart JSON, stdlib only, no key. `GC=F`
+              (COMEX continuous gold futures), ~5 years of daily bars.
+  twelvedata  api.twelvedata.com, needs TWELVEDATA_API_KEY. `XAU/USD` spot
+              gold, daily bars back to 2008, plus intraday. Free tier is
+              800 calls/day.
+  yfinance    the `yfinance` package (`pip install yfinance`).
 
 Every successful fetch is cached to state/price_cache.csv; if a later fetch
 fails the agent falls back to that cache so an offline run still works.
 """
 import csv
 import json
+import os
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -19,6 +23,8 @@ from datetime import datetime, timezone
 from . import paths
 
 _YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range={rng}&interval=1d"
+_TWELVEDATA = ("https://api.twelvedata.com/time_series"
+               "?symbol={sym}&interval={interval}&outputsize={n}&apikey={key}")
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; gold-agent/1.0)"}
 _FIELDS = ["date", "open", "high", "low", "close"]
 
@@ -41,6 +47,29 @@ def _fetch_yahoo_json(symbol: str, rng: str = "5y") -> list[dict]:
         bars.append({
             "date": datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d"),
             "open": float(o), "high": float(h), "low": float(l), "close": float(c),
+        })
+    return bars
+
+
+def _fetch_twelvedata(symbol: str, interval: str, n: int) -> list[dict]:
+    key = os.environ.get("TWELVEDATA_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("TWELVEDATA_API_KEY is not set (put it in .env)")
+    url = _TWELVEDATA.format(sym=urllib.parse.quote(symbol), interval=interval,
+                             n=n, key=key)
+    req = urllib.request.Request(url, headers=_HEADERS)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    if payload.get("status") != "ok":
+        raise RuntimeError(f"twelvedata error: {payload.get('message', payload)}")
+
+    bars = []
+    for row in reversed(payload["values"]):          # API returns newest-first
+        bars.append({
+            "date": row["datetime"],                 # "YYYY-MM-DD" or "... HH:MM:SS"
+            "open": float(row["open"]), "high": float(row["high"]),
+            "low": float(row["low"]), "close": float(row["close"]),
         })
     return bars
 
@@ -83,18 +112,26 @@ def get_history(goal: dict, use_cache: bool = True, refresh: bool = False) -> li
         if cached:
             return cached
 
-    symbol = goal.get("yf_symbol", "GC=F")
-    source = goal.get("data_source", "yahoo")
+    source = (os.environ.get("DATA_SOURCE") or goal.get("data_source") or "yahoo").lower()
     try:
-        bars = _fetch_yfinance(symbol) if source == "yfinance" else _fetch_yahoo_json(symbol)
+        if source == "twelvedata":
+            bars = _fetch_twelvedata(
+                os.environ.get("TWELVEDATA_SYMBOL", "XAU/USD"),
+                os.environ.get("TWELVEDATA_INTERVAL", "1day"),
+                int(os.environ.get("TWELVEDATA_OUTPUTSIZE", "5000")),
+            )
+        elif source == "yfinance":
+            bars = _fetch_yfinance(goal.get("yf_symbol", "GC=F"))
+        else:
+            bars = _fetch_yahoo_json(goal.get("yf_symbol", "GC=F"))
     except Exception as e:
         cached = _read_cache()
         if cached:
-            print(f"[data] live fetch failed ({e}); using {len(cached)} cached bars")
+            print(f"[data] {source} fetch failed ({e}); using {len(cached)} cached bars")
             return cached
         raise SystemExit(
-            f"[data] could not fetch gold prices ({e}) and no cache exists.\n"
-            f"       Retry in a minute, or set data_source: yfinance in goal.yaml."
+            f"[data] could not fetch gold prices from {source} ({e}) and no cache exists.\n"
+            f"       Check .env / your connection, or set DATA_SOURCE=yahoo."
         )
 
     if not bars:

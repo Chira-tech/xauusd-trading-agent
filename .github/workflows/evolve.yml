@@ -1,0 +1,63 @@
+name: evolve
+
+# Continuous strategy evolution. Each run does a batch of scientific-method
+# iterations against the held-out validation window and commits the updated
+# strategy + experiment ledger back to the repo.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"        # every 6 hours
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "iterations this run"
+        default: "25"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: evolve
+  cancel-in-progress: false
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: write .env
+        run: |
+          KEY="${{ secrets.TWELVEDATA_API_KEY }}"
+          if [ -n "$KEY" ]; then
+            printf 'TWELVEDATA_API_KEY=%s\nDATA_SOURCE=twelvedata\n' "$KEY" > .env
+          else
+            printf 'DATA_SOURCE=yahoo\n' > .env
+            echo "::warning::TWELVEDATA_API_KEY secret not set - falling back to the keyless Yahoo feed"
+          fi
+
+      - name: evolve
+        run: |
+          python run.py evolve --resume \
+            --iterations "${{ github.event.inputs.iterations || '25' }}"
+
+      - name: status
+        run: python run.py status || true
+
+      - name: commit results
+        run: |
+          git config user.name "evolve-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state/strategy.yaml state/experiments.jsonl state/history 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no strategy change this run"
+          else
+            git commit -m "evolve: $(date -u +%FT%TZ) [skip ci]"
+            git push
+          fi

@@ -2,4 +2,10 @@
 __pycache__/
 *.pyc
 .env
-state/
+
+# keep the evolving strategy + experiment ledger; ignore the noisy/regenerable rest
+state/*
+!state/strategy.yaml
+!state/experiments.jsonl
+!state/history
+!state/history/*
