@@ -1,0 +1,4 @@
+pyyaml>=6.0
+numpy>=1.26
+# optional -- only needed if you set data_source: yfinance in goal.yaml
+# yfinance>=0.2.40
