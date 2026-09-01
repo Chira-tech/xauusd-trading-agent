@@ -21,6 +21,12 @@ Anthropic API via ANTHROPIC_API_KEY instead.
 import argparse
 import json
 import os
+import sys
+
+try:  # make unicode in --llm reasoning safe on legacy Windows consoles
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from agent import config, paths
 from agent.data import get_history
@@ -106,8 +112,8 @@ def cmd_status(args):
         from collections import Counter
         tally = Counter(e["verdict"] for e in exps)
         print(f"\nEXPERIMENTS  {len(exps)} run   "
-              f"SUPPORTED {tally['SUPPORTED']}  FALSIFIED {tally['FALSIFIED']}  "
-              f"INCONCLUSIVE {tally['INCONCLUSIVE']}")
+              f"SUPPORTED {tally['SUPPORTED']}  INCONCLUSIVE {tally['INCONCLUSIVE']}  "
+              f"NEUTRAL {tally['NEUTRAL']}  FALSIFIED {tally['FALSIFIED']}")
         for e in exps[-8:]:
             print(f"  #{e['iter']:>3}  {e['variable']}: {e['old_value']} -> {e['new_value']}   "
                   f"val {e['val_score_before']:+.3f} -> {e['val_score_after']:+.3f}   "
@@ -119,6 +125,19 @@ def cmd_refresh(args):
     bars = get_history(goal, use_cache=False, refresh=True)
     print(f"Refreshed {len(bars)} bars of {goal['asset']}  "
           f"{bars[0]['date']} -> {bars[-1]['date']}")
+
+
+def cmd_report(args):
+    from agent import report
+    goal = config.load_goal()
+    if args.csv:
+        n = report.to_csv(args.csv)
+        print(f"wrote {n} rows to {args.csv}")
+        return
+    if args.watch:
+        report.watch(goal, every=args.watch)
+        return
+    print(report.build_report(goal))
 
 
 def main():
@@ -167,6 +186,13 @@ def main():
 
     s = sub.add_parser("status", help="print strategy, equity, reflection log")
     s.set_defaults(func=cmd_status)
+
+    rp = sub.add_parser("report", help="progress report over the experiment ledger")
+    rp.add_argument("--watch", type=int, nargs="?", const=5, default=0,
+                    metavar="SEC", help="redraw every SEC seconds (default 5)")
+    rp.add_argument("--csv", metavar="PATH",
+                    help="write the validation-score trajectory to a CSV and exit")
+    rp.set_defaults(func=cmd_report)
 
     rf = sub.add_parser("refresh", help="re-download the gold price history")
     rf.set_defaults(func=cmd_refresh)

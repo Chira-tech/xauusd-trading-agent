@@ -1,0 +1,11 @@
+version: '04'
+entry:
+  indicator: rsi
+  period: 14
+  threshold: 30
+  direction: long
+exit:
+  rsi_exit: 55
+  take_profit_pct: 3.0
+stop_loss_pct: 2.0
+position_size_r: 0.1
