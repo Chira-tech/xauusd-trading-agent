@@ -28,7 +28,7 @@ import yaml
 
 from . import config, paths
 from .portfolio import read_jsonl
-from .reflect import _get, _set, choose_change
+from .reflect import BOUNDS, _get, _set, choose_change
 from .score import score
 from .sim import simulate
 
@@ -92,7 +92,16 @@ def evolve(goal, bars, iterations=100, val_frac=0.2, patience=15,
     since_sup = 0
     falsified_vars: set[str] = set()
 
-    for it in range(1, iterations + 1):
+    # Continue iteration numbering across runs, and carry forward variables that
+    # were already tried and failed against the *current* strategy version so a
+    # resumed run (e.g. the CI cron) doesn't just re-test known dead ends.
+    prior = [] if fresh else read_jsonl(paths.EXPERIMENTS_FILE)
+    start_iter = (max(e["iter"] for e in prior) + 1) if prior else 1
+    for e in prior[-len(BOUNDS) * 4:]:
+        if e.get("verdict") in ("FALSIFIED", "NEUTRAL") and e.get("from_version") == strategy["version"]:
+            falsified_vars.add(e["variable"])
+
+    for it in range(start_iter, start_iter + iterations):
         train_res = simulate(train, strategy, goal)
         if train_res["n_trades"] == 0:
             print(f"iter {it}: strategy takes no trades on the train window; stopping.")
