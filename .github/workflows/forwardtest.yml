@@ -1,0 +1,56 @@
+name: forward-test
+
+# Hourly: pull the newest XAU/USD bar and step the FROZEN strategy forward on
+# paper. No learning here -- this is the honest out-of-sample check. If a run is
+# skipped, the next one catches up (it processes every bar since the last step).
+
+on:
+  schedule:
+    - cron: "23 * * * *"        # hourly, offset off the top of the hour
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: forward-test
+  cancel-in-progress: false
+
+jobs:
+  step:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: write .env
+        run: |
+          KEY="${{ secrets.TWELVEDATA_API_KEY }}"
+          if [ -z "$KEY" ]; then
+            echo "::error::forward-test needs hourly gold data -- add the TWELVEDATA_API_KEY repo secret"
+            exit 1
+          fi
+          printf 'TWELVEDATA_API_KEY=%s\nDATA_SOURCE=twelvedata\nTWELVEDATA_INTERVAL=1h\n' "$KEY" > .env
+
+      - name: forward step
+        run: python run.py forward-step
+
+      - name: forward report
+        run: python run.py forward-report || true
+
+      - name: commit
+        run: |
+          git config user.name "forward-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state/forward
+          if git diff --cached --quiet; then
+            echo "no forward-test change this run"
+          else
+            git commit -m "forward: $(date -u +%FT%TZ) [skip ci]"
+            git push
+          fi

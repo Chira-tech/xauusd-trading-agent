@@ -3,9 +3,11 @@ __pycache__/
 *.pyc
 .env
 
-# keep the evolving strategy + experiment ledger; ignore the noisy/regenerable rest
+# keep the evolving strategy, experiment ledger, and forward test
 state/*
 !state/strategy.yaml
 !state/experiments.jsonl
 !state/history
 !state/history/*
+!state/forward
+!state/forward/*

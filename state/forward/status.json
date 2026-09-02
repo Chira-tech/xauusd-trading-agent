@@ -1,0 +1,10 @@
+{
+  "frozen_at": "2026-09-02T05:24:49+00:00",
+  "anchor_bar": "2026-09-02 15:00:00",
+  "last_bar": "2026-09-02 15:00:00",
+  "last_step": "2026-09-02T05:24:53+00:00",
+  "equity": 10000.0,
+  "in_position": false,
+  "open_position": null,
+  "trades": 0
+}

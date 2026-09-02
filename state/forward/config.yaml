@@ -1,0 +1,25 @@
+frozen_at: '2026-09-02T05:24:49+00:00'
+asset: XAU/USD spot gold
+interval: 1h
+starting_equity: 10000.0
+costs:
+  spread_bps: 2.0
+  slippage_bps: 1.0
+validation_expectation: 0.9954
+goal:
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.2
+  failure_below: -0.04
+strategy:
+  version: '02'
+  entry:
+    indicator: rsi
+    period: 14
+    threshold: 32.0
+    direction: long
+  exit:
+    rsi_exit: 55
+    take_profit_pct: 3.0
+  stop_loss_pct: 2.0
+  position_size_r: 0.5

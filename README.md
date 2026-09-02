@@ -95,6 +95,36 @@ The CI run uses the deterministic rule. To use `--llm` there, add an
 `ANTHROPIC_API_KEY` secret and change the `evolve` step to
 `python run.py evolve --resume --llm --backend api`.
 
+## Forward test — the honest out-of-sample check
+
+`evolve` optimises against history, so a great score there can still be
+overfit. The forward test settles it: **freeze one strategy, then only ever run
+it against bars that close *after* the freeze.**
+
+```powershell
+python run.py forward-freeze          # lock the current strategy, start the clock
+python run.py forward-step            # process new bars (CI does this hourly)
+python run.py forward-report          # results vs the backtest expectation
+```
+
+- Runs on **hourly** `XAU/USD` bars with a modelled cost (2 bps spread + 1 bps
+  slippage) on every fill, so the numbers aren't rosier than reality.
+- `forward-freeze` anchors the start to the newest closed bar at that moment,
+  and records the strategy's held-out validation score for comparison.
+- `forward-report` prints **score at freeze vs score live** — if live is far
+  below, the backtest was overfit.
+- Nothing here learns. `evolve` keeps running separately on history; you decide
+  when to `forward-freeze` a newer version.
+
+**Hands-off:** `.github/workflows/forwardtest.yml` runs `forward-step` hourly and
+commits `state/forward/`. It needs the `TWELVEDATA_API_KEY` repo secret (hourly
+gold data) and fails loudly without it.
+
+State: `state/forward/config.yaml` (the frozen strategy + costs),
+`trades.jsonl`, `equity.jsonl`, `status.json`.
+
+A meaningful read needs ~20+ trades; on hourly bars that is weeks, not days.
+
 ## LLM brain (optional) — `--llm`
 
 By default the "which one variable to change" decision comes from the

@@ -28,7 +28,7 @@ try:  # make unicode in --llm reasoning safe on legacy Windows consoles
 except Exception:
     pass
 
-from agent import config, paths
+from agent import config, forward, paths
 from agent.data import get_history
 from agent.evolve import evolve
 from agent.loop import backtest, paper
@@ -127,6 +127,25 @@ def cmd_refresh(args):
           f"{bars[0]['date']} -> {bars[-1]['date']}")
 
 
+def cmd_forward_freeze(args):
+    goal = config.load_goal()
+    cfg = forward.freeze(goal, interval=args.interval,
+                         spread_bps=args.spread_bps, slippage_bps=args.slippage_bps)
+    print(f"Froze strategy v{cfg['strategy']['version']} for a forward test.")
+    print(f"  interval {cfg['interval']}   cost {args.spread_bps}+{args.slippage_bps} bps/fill")
+    print(f"  validation score at freeze: {cfg['validation_expectation']}")
+    print(f"  clock starts now: {cfg['frozen_at']}")
+    print("Run `python run.py forward-step` on a schedule (the CI workflow does this hourly).")
+
+
+def cmd_forward_step(args):
+    forward.step(config.load_goal())
+
+
+def cmd_forward_report(args):
+    print(forward.report(config.load_goal()))
+
+
 def cmd_report(args):
     from agent import report
     goal = config.load_goal()
@@ -196,6 +215,23 @@ def main():
 
     rf = sub.add_parser("refresh", help="re-download the gold price history")
     rf.set_defaults(func=cmd_refresh)
+
+    ff = sub.add_parser("forward-freeze",
+                        help="lock the current strategy and start a forward test")
+    ff.add_argument("--interval", default="1h", help="bar interval (default 1h)")
+    ff.add_argument("--spread-bps", type=float, default=forward.DEFAULT_SPREAD_BPS,
+                    dest="spread_bps", help="modelled spread per fill (default 2)")
+    ff.add_argument("--slippage-bps", type=float, default=forward.DEFAULT_SLIPPAGE_BPS,
+                    dest="slippage_bps", help="modelled slippage per fill (default 1)")
+    ff.set_defaults(func=cmd_forward_freeze)
+
+    fs = sub.add_parser("forward-step",
+                        help="process new bars against the frozen strategy")
+    fs.set_defaults(func=cmd_forward_step)
+
+    fr = sub.add_parser("forward-report",
+                        help="forward-test results vs the backtest expectation")
+    fr.set_defaults(func=cmd_forward_report)
 
     args = p.parse_args()
     args.func(args)
